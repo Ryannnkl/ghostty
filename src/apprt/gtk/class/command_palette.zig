@@ -8,6 +8,7 @@ const gobject = @import("gobject");
 const gtk = @import("gtk");
 
 const input = @import("../../../input.zig");
+const CoreConfig = @import("../../../config.zig").Config;
 const gresource = @import("../build/gresource.zig");
 const key = @import("../key.zig");
 const WeakRef = @import("../weak_ref.zig").WeakRef;
@@ -191,7 +192,7 @@ pub const CommandPalette = extern struct {
         for (cfg.@"command-palette-entry".value.items) |command| {
             // Filter out actions that are not implemented or don't make sense
             // for GTK.
-            if (!isActionSupportedOnGtk(command.action)) continue;
+            if (!isActionSupportedOnGtk(command.action, config.get())) continue;
 
             const cmd = Command.new(config, command) catch |err| {
                 log.warn("failed to create command: {}", .{err});
@@ -207,7 +208,10 @@ pub const CommandPalette = extern struct {
     }
 
     /// Check if an action is supported on GTK.
-    fn isActionSupportedOnGtk(action: input.Binding.Action) bool {
+    fn isActionSupportedOnGtk(
+        action: input.Binding.Action,
+        config: *const CoreConfig,
+    ) bool {
         return switch (action) {
             .close_all_windows,
             .toggle_secure_input,
@@ -217,6 +221,11 @@ pub const CommandPalette = extern struct {
             .reset_window_size,
             .toggle_window_float_on_top,
             => false,
+
+            .toggle_tab_sidebar => switch (config.@"gtk-tabs-location") {
+                .left, .right => true,
+                .top, .bottom => false,
+            },
 
             else => true,
         };

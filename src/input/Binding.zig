@@ -594,6 +594,12 @@ pub const Action = union(enum) {
     /// found by running `ghostty +version`.
     toggle_tab_overview,
 
+    /// Toggle the vertical tab sidebar.
+    ///
+    /// This is only supported on Linux when `gtk-tabs-location` is set to
+    /// `left` or `right`.
+    toggle_tab_sidebar,
+
     /// Change the title of the current focused surface via a pop-up prompt.
     prompt_surface_title,
 
@@ -1419,6 +1425,7 @@ pub const Action = union(enum) {
             .goto_tab,
             .move_tab,
             .toggle_tab_overview,
+            .toggle_tab_sidebar,
             .new_split,
             .goto_split,
             .goto_window,

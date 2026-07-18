@@ -664,12 +664,14 @@ extension Ghostty {
 
             case GHOSTTY_ACTION_TOGGLE_TAB_OVERVIEW:
                 fallthrough
+            case GHOSTTY_ACTION_TOGGLE_TAB_SIDEBAR:
+                fallthrough
             case GHOSTTY_ACTION_TOGGLE_WINDOW_DECORATIONS:
                 fallthrough
             case GHOSTTY_ACTION_SIZE_LIMIT:
                 fallthrough
             case GHOSTTY_ACTION_QUIT_TIMER:
-                fallthrough
+                return false
             case GHOSTTY_ACTION_SHOW_CHILD_EXITED:
                 return showChildExited(app, target: target, v: action.action.child_exited)
             case GHOSTTY_ACTION_COPY_TITLE_TO_CLIPBOARD:
