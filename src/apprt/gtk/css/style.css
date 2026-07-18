@@ -158,6 +158,110 @@ label.resize-overlay {
 }
 
 /*
+ * Vertical tabs
+ */
+.vertical-tabs-list .vertical-tab-row {
+  min-height: 28px;
+  padding: 4px 6px 4px 10px;
+  border-radius: 9px;
+}
+
+/* The animated placeholder lives beside the visible row. Keep Adwaita's
+ * selection and minimum height on the row itself so they cannot expand to
+ * include that placeholder. */
+.vertical-tabs-list > row {
+  min-height: 0;
+}
+
+.vertical-tabs-list row.activatable:hover,
+.vertical-tabs-list row.activatable:active,
+.vertical-tabs-list row.activatable:selected,
+.vertical-tabs-list row.activatable:selected:hover,
+.vertical-tabs-list row.activatable:selected:active {
+  background-color: transparent;
+  box-shadow: none;
+}
+
+.vertical-tabs-list row.activatable:hover .vertical-tab-row {
+  background-color: alpha(currentColor, 0.07);
+}
+
+.vertical-tabs-list row.activatable:active .vertical-tab-row {
+  background-color: alpha(currentColor, 0.16);
+}
+
+.vertical-tabs-list row.activatable:selected .vertical-tab-row {
+  background-color: alpha(currentColor, 0.1);
+}
+
+.vertical-tabs-list row.activatable:selected:hover .vertical-tab-row {
+  background-color: alpha(currentColor, 0.13);
+}
+
+.vertical-tabs-list row.activatable:selected:active .vertical-tab-row {
+  background-color: alpha(currentColor, 0.19);
+}
+
+.vertical-tabs-sidebar scrollbar.vertical {
+  min-width: 0;
+  opacity: 0;
+}
+
+.vertical-tabs-list .vertical-tab-attention {
+  opacity: 0.8;
+}
+
+.vertical-tabs-list .vertical-tab-close {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+}
+
+.vertical-tabs-list .vertical-tab-placeholder {
+  min-height: 36px;
+}
+
+.vertical-tabs-list .vertical-tab-drag-origin {
+  opacity: 0;
+}
+
+.vertical-tabs-list:drop(active) {
+  outline: none;
+  box-shadow: none;
+}
+
+.vertical-tab-drag-icon {
+  min-height: 28px;
+  padding: 4px 6px 4px 10px;
+  border-radius: 9px;
+  background-color: rgba(70, 70, 70, 0.96);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+
+.window.vertical-tabs-left .vertical-tabs-list row {
+  margin-right: 0;
+}
+
+.window.vertical-tabs-left .vertical-tabs-list {
+  padding-right: 0;
+}
+
+.window.vertical-tabs-right .vertical-tabs-list row {
+  margin-left: 0;
+}
+
+.window.vertical-tabs-right .vertical-tabs-list {
+  padding-left: 0;
+}
+
+.vertical-tabs-paned > separator {
+  min-width: 1px;
+  margin: 0;
+  padding: 0;
+  background-color: rgba(128, 128, 128, 0.25);
+}
+
+/*
  * Splits
  */
 

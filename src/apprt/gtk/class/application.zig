@@ -948,6 +948,18 @@ pub const Application = extern struct {
                 \\windowhandle:backdrop {{
                 \\ background-color: oklab(from rgb({d},{d},{d}) calc(l * 0.9) a b / alpha);
                 \\}}
+                \\.vertical-tabs-sidebar {{
+                \\  background-color: rgba({d},{d},{d},{d:.2});
+                \\}}
+                \\.vertical-tabs-sidebar windowhandle,
+                \\.vertical-tabs-sidebar headerbar,
+                \\.vertical-tabs-sidebar scrolledwindow,
+                \\.vertical-tabs-sidebar listview {{
+                \\  background-color: transparent;
+                \\}}
+                \\.vertical-tabs-paned > separator {{
+                \\  background-color: rgb({d},{d},{d});
+                \\}}
                 \\
             , .{
                 headerbar_background.r,
@@ -956,6 +968,16 @@ pub const Application = extern struct {
                 headerbar_foreground.r,
                 headerbar_foreground.g,
                 headerbar_foreground.b,
+                headerbar_background.r,
+                headerbar_background.g,
+                headerbar_background.b,
+                headerbar_background.r,
+                headerbar_background.g,
+                headerbar_background.b,
+                if (config.@"gtk-vertical-tabs-transparent")
+                    @max(0, @min(1, config.@"background-opacity"))
+                else
+                    1.0,
                 headerbar_background.r,
                 headerbar_background.g,
                 headerbar_background.b,
@@ -1052,6 +1074,22 @@ pub const Application = extern struct {
                 \\windowhandle:backdrop {{
                 \\ background-color: var(--headerbar-backdrop-color);
                 \\}}
+                \\.vertical-tabs-sidebar {{
+                \\  background-color: rgba({d},{d},{d},{d:.2});
+                \\}}
+                \\.vertical-tabs-sidebar windowhandle,
+                \\.vertical-tabs-sidebar headerbar,
+                \\.vertical-tabs-sidebar scrolledwindow,
+                \\.vertical-tabs-sidebar listview {{
+                \\  background-color: transparent;
+                \\}}
+                \\.vertical-tabs-paned > separator {{
+                \\  background-color: color-mix(
+                \\    in srgb,
+                \\    var(--ghostty-bg) 88%,
+                \\    var(--ghostty-fg)
+                \\  );
+                \\}}
             , .{
                 headerbar_foreground.r,
                 headerbar_foreground.g,
@@ -1059,6 +1097,13 @@ pub const Application = extern struct {
                 headerbar_background.r,
                 headerbar_background.g,
                 headerbar_background.b,
+                headerbar_background.r,
+                headerbar_background.g,
+                headerbar_background.b,
+                if (config.@"gtk-vertical-tabs-transparent")
+                    @max(0, @min(1, config.@"background-opacity"))
+                else
+                    1.0,
             }),
             else => {},
         }
