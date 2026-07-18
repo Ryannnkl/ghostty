@@ -51,6 +51,16 @@ template $GhosttyWindow: Adw.ApplicationWindow {
         };
 
         [start]
+        Gtk.ToggleButton vertical_tabs_header_button {
+          clicked => $toggle_vertical_tabs();
+          icon-name: "sidebar-show-symbolic";
+          tooltip-text: _("Toggle Tab Sidebar");
+          visible: bind template.vertical-tabs;
+          can-focus: false;
+          focus-on-click: false;
+        }
+
+        [start]
         Adw.SplitButton {
           clicked => $new_tab();
           icon-name: "tab-new-symbolic";
@@ -154,18 +164,105 @@ template $GhosttyWindow: Adw.ApplicationWindow {
           visible: bind template.debug;
         }
 
-        Adw.ToastOverlay toast_overlay {
-          Adw.TabView tab_view {
-            notify::n-pages => $notify_n_pages();
-            notify::selected-page => $notify_selected_page();
-            close-page => $close_page();
-            page-attached => $page_attached();
-            page-detached => $page_detached();
-            create-window => $tab_create_window();
-            setup-menu => $setup_tab_menu();
-            menu-model: tab_context_menu;
-            shortcuts: none;
-          }
+        Gtk.Paned tab_split_view {
+          orientation: horizontal;
+          position: 240;
+          resize-start-child: false;
+          resize-end-child: true;
+          shrink-start-child: false;
+          shrink-end-child: false;
+          notify::position => $vertical_tabs_position_changed();
+
+          styles [
+            "vertical-tabs-paned",
+          ]
+
+          start-child: Adw.ToolbarView vertical_tabs_sidebar {
+            width-request: 180;
+
+            styles [
+              "vertical-tabs-sidebar",
+            ]
+
+            [top]
+            Adw.HeaderBar {
+              show-start-title-buttons: false;
+              show-end-title-buttons: false;
+
+              title-widget: Gtk.Box {};
+
+              [start]
+              Gtk.Box {
+                Gtk.ToggleButton vertical_tabs_sidebar_button {
+                  clicked => $toggle_vertical_tabs();
+                  icon-name: "sidebar-show-symbolic";
+                  tooltip-text: _("Hide Tab Sidebar");
+                  can-focus: false;
+                  focus-on-click: false;
+                }
+
+                Gtk.MenuButton {
+                  notify::active => $notify_menu_active();
+                  icon-name: "open-menu-symbolic";
+                  menu-model: main_menu;
+                  tooltip-text: _("Main Menu");
+                  can-focus: false;
+                }
+              }
+
+              [end]
+              Gtk.Box {
+                Gtk.ToggleButton {
+                  icon-name: "view-grid-symbolic";
+                  tooltip-text: _("View Open Tabs");
+                  active: bind tab_overview.open bidirectional;
+                  can-focus: false;
+                  focus-on-click: false;
+                }
+
+                Adw.SplitButton {
+                  clicked => $new_tab();
+                  icon-name: "tab-new-symbolic";
+                  tooltip-text: _("New Tab");
+                  dropdown-tooltip: _("New Split");
+                  menu-model: split_menu;
+                  can-focus: false;
+                  focus-on-click: false;
+                }
+              }
+            }
+
+            Gtk.ScrolledWindow {
+              hscrollbar-policy: never;
+              vscrollbar-policy: automatic;
+              vexpand: true;
+
+              Gtk.ListView vertical_tab_list {
+                activate => $vertical_tab_activated();
+                model: bind tab_view.pages;
+
+                styles [
+                  "navigation-sidebar",
+                  "vertical-tabs-list",
+                ]
+              }
+            }
+          };
+
+          end-child: Adw.ToastOverlay toast_overlay {
+            Adw.TabView tab_view {
+              notify::n-pages => $notify_n_pages();
+              notify::is-transferring-page => $notify_is_transferring_page();
+              notify::selected-page => $notify_selected_page();
+              close-page => $close_page();
+              page-attached => $page_attached();
+              page-detached => $page_detached();
+              create-window => $tab_create_window();
+              setup-menu => $setup_tab_menu();
+              menu-model: tab_context_menu;
+              shortcuts: none;
+            }
+          };
         }
       }
     }
@@ -211,6 +308,11 @@ menu main_menu {
     item {
       label: _("New Window");
       action: "win.new-window";
+    }
+
+    item {
+      label: _("Toggle Tab Sidebar");
+      action: "win.toggle-tab-sidebar";
     }
 
     item {

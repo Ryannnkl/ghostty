@@ -19,6 +19,7 @@ const gtk_version = @import("../gtk_version.zig");
 const adw_version = @import("../adw_version.zig");
 const gresource = @import("../build/gresource.zig");
 const winprotopkg = @import("../winproto.zig");
+const vertical_tabs = @import("../vertical_tabs.zig");
 const Common = @import("../class.zig").Common;
 const Config = @import("config.zig").Config;
 const Application = @import("application.zig").Application;
@@ -34,6 +35,8 @@ const log = std.log.scoped(.gtk_ghostty_window);
 
 pub const Window = extern struct {
     const Self = @This();
+    const vertical_tabs_min_width: c_int = 180;
+    const vertical_tabs_max_width: c_int = 480;
     parent_instance: Parent,
     pub const Parent = adw.ApplicationWindow;
     pub const getGObjectType = gobject.ext.defineClass(Self, .{
@@ -213,6 +216,21 @@ pub const Window = extern struct {
                 },
             );
         };
+
+        pub const @"vertical-tabs" = struct {
+            pub const name = "vertical-tabs";
+            const impl = gobject.ext.defineProperty(
+                name,
+                Self,
+                bool,
+                .{
+                    .default = false,
+                    .accessor = gobject.ext.typedAccessor(Self, bool, .{
+                        .getter = Self.getVerticalTabs,
+                    }),
+                },
+            );
+        };
     };
 
     const Private = struct {
@@ -222,6 +240,9 @@ pub const Window = extern struct {
 
         /// Timeout source to react to this window becoming (in)active.
         handle_active_state_source: ?c_uint = null,
+
+        /// Idle source that closes an empty window after a tab transfer ends.
+        tab_transfer_close_source: ?c_uint = null,
 
         /// The window decoration override. If this is not set then we'll
         /// inherit whatever the config has. This allows overriding the
@@ -259,10 +280,23 @@ pub const Window = extern struct {
         /// setup by `setup-menu`.
         context_menu_page: ?*adw.TabPage = null,
 
+        /// Manual sidebar visibility override for this window. A null value
+        /// means the configured window-show-tab-bar policy is active.
+        vertical_tabs_visible: ?bool = null,
+
+        /// Current sidebar width in logical pixels.
+        vertical_tabs_width: c_int = 240,
+        vertical_tabs_adjusting: bool = false,
+
         // Template bindings
         tab_overview: *adw.TabOverview,
         tab_bar: *adw.TabBar,
         tab_view: *adw.TabView,
+        tab_split_view: *gtk.Paned,
+        vertical_tab_list: *gtk.ListView,
+        vertical_tabs_sidebar: *adw.ToolbarView,
+        vertical_tabs_header_button: *gtk.ToggleButton,
+        vertical_tabs_sidebar_button: *gtk.ToggleButton,
         toolbar: *adw.ToolbarView,
         toast_overlay: *adw.ToastOverlay,
 
@@ -299,6 +333,13 @@ pub const Window = extern struct {
         // from the application.
         const priv = self.private();
 
+        // adw-sidebar-symbolic is the current libadwaita sidebar icon. Fall
+        // back to the long-standing Adwaita icon on older installations.
+        const icon_theme = gtk.IconTheme.getForDisplay(self.as(gtk.Widget).getDisplay());
+        if (icon_theme.hasIcon("adw-sidebar-symbolic") != 0) {
+            priv.vertical_tabs_header_button.as(gtk.Button).setIconName("adw-sidebar-symbolic");
+            priv.vertical_tabs_sidebar_button.as(gtk.Button).setIconName("adw-sidebar-symbolic");
+        }
         const config = config: {
             if (priv.config) |config| break :config config.get();
             const app = Application.default();
@@ -320,6 +361,8 @@ pub const Window = extern struct {
         // are only synced from the currently active tab.
         priv.tab_bindings = gobject.BindingGroup.new();
         priv.tab_bindings.bind("title", self.as(gobject.Object), "title", .{});
+
+        vertical_tabs.setup(priv.vertical_tab_list);
 
         // Set our window icon. We can't set this in the blueprint file
         // because its dependent on the build config.
@@ -376,6 +419,7 @@ pub const Window = extern struct {
             .init("clear", actionClear, null),
             // TODO: accept the surface that toggled the command palette
             .init("toggle-command-palette", actionToggleCommandPalette, null),
+            .init("toggle-tab-sidebar", actionToggleTabSidebar, null),
             .init("toggle-inspector", actionToggleInspector, null),
         };
 
@@ -482,25 +526,6 @@ pub const Window = extern struct {
             page.as(gobject.Object),
             "tooltip",
             .{ .sync_create = true },
-        );
-
-        // Bind signals
-        const split_tree = tab.getSplitTree();
-        _ = SplitTree.signals.changed.connect(
-            split_tree,
-            *Self,
-            tabSplitTreeChanged,
-            self,
-            .{},
-        );
-
-        // Run an initial notification for the surface tree so we can setup
-        // initial state.
-        tabSplitTreeChanged(
-            split_tree,
-            null,
-            split_tree.getTree(),
-            self,
         );
 
         return page;
@@ -611,6 +636,33 @@ pub const Window = extern struct {
         tab_overview.setOpen(@intFromBool(!is_open));
     }
 
+    pub fn toggleTabSidebar(self: *Self) bool {
+        if (!self.getVerticalTabs()) return false;
+
+        const priv = self.private();
+        const visible = priv.vertical_tabs_sidebar.as(gtk.Widget).isVisible() == 0;
+        priv.vertical_tabs_visible = visible;
+        self.setTabSidebarVisible(visible);
+        return true;
+    }
+
+    fn verticalTabActivated(
+        _: *gtk.ListView,
+        _: c_uint,
+        self: *Self,
+    ) callconv(.c) void {
+        if (self.getActiveSurface()) |surface| {
+            _ = surface.as(gtk.Widget).grabFocus();
+        }
+    }
+
+    fn btnToggleVerticalTabs(
+        _: *gtk.Button,
+        self: *Self,
+    ) callconv(.c) void {
+        _ = self.toggleTabSidebar();
+    }
+
     /// Toggle the visible property.
     pub fn toggleVisibility(self: *Self) void {
         const widget = self.as(gtk.Widget);
@@ -672,6 +724,7 @@ pub const Window = extern struct {
             "tabs-wide",
             "toolbar-style",
             "titlebar-style",
+            "vertical-tabs",
         }) |key| {
             self.as(gobject.Object).notifyByPspec(
                 @field(properties, key).impl.param_spec,
@@ -695,13 +748,26 @@ pub const Window = extern struct {
             !gtk_version.atLeast(4, 16, 0) and
                 config.@"window-theme" == .ghostty,
         );
+        self.toggleCssClass(
+            "vertical-tabs-left",
+            config.@"gtk-tabs-location" == .left,
+        );
+        self.toggleCssClass(
+            "vertical-tabs-right",
+            config.@"gtk-tabs-location" == .right,
+        );
 
         // Move the tab bar to the proper location.
-        priv.toolbar.remove(priv.tab_bar.as(gtk.Widget));
+        if (priv.tab_bar.as(gtk.Widget).getParent() != null) {
+            priv.toolbar.remove(priv.tab_bar.as(gtk.Widget));
+        }
         switch (config.@"gtk-tabs-location") {
             .top => priv.toolbar.addTopBar(priv.tab_bar.as(gtk.Widget)),
             .bottom => priv.toolbar.addBottomBar(priv.tab_bar.as(gtk.Widget)),
+            .left, .right => {},
         }
+        self.syncTabSidebar();
+        self.syncTabSidebarAction();
 
         // Do our window-protocol specific appearance sync.
         priv.winproto.syncAppearance() catch |err| {
@@ -728,6 +794,15 @@ pub const Window = extern struct {
             action_map.lookupAction("copy") orelse return,
         ) orelse return;
         action.setEnabled(@intFromBool(has_selection));
+    }
+
+    fn syncTabSidebarAction(self: *Self) void {
+        const action_map = gobject.ext.cast(gio.ActionMap, self) orelse return;
+        const action = gobject.ext.cast(
+            gio.SimpleAction,
+            action_map.lookupAction("toggle-tab-sidebar") orelse return,
+        ) orelse return;
+        action.setEnabled(@intFromBool(self.getVerticalTabs()));
     }
 
     fn toggleCssClass(self: *Self, class: [:0]const u8, value: bool) void {
@@ -1014,7 +1089,7 @@ pub const Window = extern struct {
             return false;
         }
 
-        return switch (config.@"gtk-titlebar-style") {
+        return switch (self.getTitlebarStyle()) {
             // If the titlebar style is tabs never show the titlebar.
             .tabs => false,
 
@@ -1027,6 +1102,8 @@ pub const Window = extern struct {
     fn getTabsAutohide(self: *Self) bool {
         const priv = self.private();
         const config = if (priv.config) |v| v.get() else return true;
+
+        if (self.getVerticalTabs()) return true;
 
         return switch (config.@"gtk-titlebar-style") {
             // If the titlebar style is tabs we cannot autohide.
@@ -1049,6 +1126,8 @@ pub const Window = extern struct {
     fn getTabsVisible(self: *Self) bool {
         const priv = self.private();
         const config = if (priv.config) |v| v.get() else return true;
+
+        if (self.getVerticalTabs()) return false;
 
         switch (config.@"gtk-titlebar-style") {
             .tabs => {
@@ -1087,7 +1166,121 @@ pub const Window = extern struct {
     fn getTitlebarStyle(self: *Self) TitlebarStyle {
         const priv = self.private();
         const config = if (priv.config) |v| v.get() else return .native;
+        if (self.getVerticalTabs()) return .native;
         return config.@"gtk-titlebar-style";
+    }
+
+    fn getVerticalTabs(self: *Self) bool {
+        const priv = self.private();
+        const config = if (priv.config) |v| v.get() else return false;
+        return vertical_tabs.enabled(config.@"gtk-tabs-location");
+    }
+
+    fn setTabSidebarVisible(self: *Self, visible: bool) void {
+        const priv = self.private();
+        priv.vertical_tabs_sidebar.as(gtk.Widget).setVisible(@intFromBool(visible));
+        priv.vertical_tabs_header_button.setActive(@intFromBool(visible));
+        priv.vertical_tabs_sidebar_button.setActive(@intFromBool(visible));
+        if (visible) self.applyTabSidebarWidth();
+    }
+
+    fn setTabSidebarSide(self: *Self, location: configpkg.Config.GtkTabsLocation) void {
+        const priv = self.private();
+        const paned = priv.tab_split_view;
+        const sidebar = priv.vertical_tabs_sidebar.as(gtk.Widget);
+        const content = priv.toast_overlay.as(gtk.Widget);
+        const sidebar_at_start = paned.getStartChild() == sidebar;
+        const desired_at_start = self.tabSidebarAtStart(location);
+        if (sidebar_at_start == desired_at_start) return;
+        const focus = self.as(gtk.Window).getFocus();
+
+        _ = sidebar.as(gobject.Object).ref();
+        defer sidebar.as(gobject.Object).unref();
+        _ = content.as(gobject.Object).ref();
+        defer content.as(gobject.Object).unref();
+
+        paned.setStartChild(null);
+        paned.setEndChild(null);
+        if (desired_at_start) {
+            paned.setStartChild(sidebar);
+            paned.setEndChild(content);
+            paned.setResizeStartChild(@intFromBool(false));
+            paned.setResizeEndChild(@intFromBool(true));
+        } else {
+            paned.setStartChild(content);
+            paned.setEndChild(sidebar);
+            paned.setResizeStartChild(@intFromBool(true));
+            paned.setResizeEndChild(@intFromBool(false));
+        }
+        if (focus) |widget| _ = widget.grabFocus();
+    }
+
+    fn tabSidebarAtStart(
+        self: *Self,
+        location: configpkg.Config.GtkTabsLocation,
+    ) bool {
+        const rtl = self.as(gtk.Widget).getDirection() == .rtl;
+        return switch (location) {
+            .left => !rtl,
+            .right => rtl,
+            .top, .bottom => unreachable,
+        };
+    }
+
+    fn applyTabSidebarWidth(self: *Self) void {
+        const priv = self.private();
+        const config = if (priv.config) |v| v.get() else return;
+        const total = priv.tab_split_view.as(gtk.Widget).getAllocatedWidth();
+        if (total <= 0) return;
+
+        priv.vertical_tabs_adjusting = true;
+        defer priv.vertical_tabs_adjusting = false;
+        const at_start = self.tabSidebarAtStart(config.@"gtk-tabs-location");
+        priv.tab_split_view.setPosition(if (at_start)
+            priv.vertical_tabs_width
+        else
+            @max(0, total - priv.vertical_tabs_width));
+    }
+
+    fn verticalTabsPositionChanged(
+        paned: *gtk.Paned,
+        _: *gobject.ParamSpec,
+        self: *Self,
+    ) callconv(.c) void {
+        const priv = self.private();
+        if (priv.vertical_tabs_adjusting or !self.getVerticalTabs()) return;
+        if (priv.vertical_tabs_sidebar.as(gtk.Widget).isVisible() == 0) return;
+
+        const config = if (priv.config) |v| v.get() else return;
+        const total = paned.as(gtk.Widget).getAllocatedWidth();
+        if (total <= 0) return;
+        const width = if (self.tabSidebarAtStart(config.@"gtk-tabs-location"))
+            paned.getPosition()
+        else
+            total - paned.getPosition();
+        const clamped = @min(
+            vertical_tabs_max_width,
+            @max(vertical_tabs_min_width, width),
+        );
+        priv.vertical_tabs_width = clamped;
+        if (width != clamped) self.applyTabSidebarWidth();
+    }
+
+    fn syncTabSidebar(self: *Self) void {
+        const priv = self.private();
+        const config = if (priv.config) |v| v.get() else return;
+        if (!self.getVerticalTabs()) {
+            self.setTabSidebarVisible(false);
+            return;
+        }
+
+        self.setTabSidebarSide(config.@"gtk-tabs-location");
+
+        const visible = priv.vertical_tabs_visible orelse vertical_tabs.initialVisibility(
+            config.@"window-show-tab-bar",
+            priv.tab_view.getNPages(),
+        );
+        self.setTabSidebarVisible(visible);
     }
 
     fn propConfig(
@@ -1096,6 +1289,7 @@ pub const Window = extern struct {
         self: *Self,
     ) callconv(.c) void {
         const priv = self.private();
+        priv.vertical_tabs_visible = null;
         if (priv.config) |config_obj| {
             const config = config_obj.get();
             if (config.@"app-notifications".@"config-reload") {
@@ -1294,6 +1488,20 @@ pub const Window = extern struct {
                 log.warn("unable to remove handle active state source", .{});
             }
             priv.handle_active_state_source = null;
+        }
+
+        if (priv.tab_overview_focus_timer) |v| {
+            if (glib.Source.remove(v) == 0) {
+                log.warn("unable to remove tab overview focus timer", .{});
+            }
+            priv.tab_overview_focus_timer = null;
+        }
+
+        if (priv.tab_transfer_close_source) |v| {
+            if (glib.Source.remove(v) == 0) {
+                log.warn("unable to remove tab transfer close source", .{});
+            }
+            priv.tab_transfer_close_source = null;
         }
 
         priv.command_palette.set(null);
@@ -1546,6 +1754,9 @@ pub const Window = extern struct {
 
         // Always reset our binding source in case we have no pages.
         priv.tab_bindings.setSource(null);
+        self.as(gobject.Object).notifyByPspec(
+            properties.@"active-surface".impl.param_spec,
+        );
 
         // Get our current page which MUST be a Tab object.
         const page = priv.tab_view.getSelectedPage() orelse return;
@@ -1578,6 +1789,21 @@ pub const Window = extern struct {
             tabCloseRequest,
             self,
             .{},
+        );
+
+        const split_tree = tab.getSplitTree();
+        _ = SplitTree.signals.changed.connect(
+            split_tree,
+            *Self,
+            tabSplitTreeChanged,
+            self,
+            .{},
+        );
+        tabSplitTreeChanged(
+            split_tree,
+            null,
+            split_tree.getTree(),
+            self,
         );
 
         // Attach listeners for the surface.
@@ -1622,6 +1848,15 @@ pub const Window = extern struct {
             null,
             self,
         );
+        _ = gobject.signalHandlersDisconnectMatched(
+            tab.getSplitTree().as(gobject.Object),
+            .{ .data = true },
+            0,
+            0,
+            null,
+            null,
+            self,
+        );
 
         // Remove the tree handlers
         if (tab.getSurfaceTree()) |tree| {
@@ -1634,11 +1869,14 @@ pub const Window = extern struct {
         _: *Self,
     ) callconv(.c) *adw.TabView {
         // Create a new window without creating a new tab.
-        const win = gobject.ext.newInstance(
-            Self,
-            .{
-                .application = Application.default(),
-            },
+        const app = Application.default();
+        const win = Self.new(app, .none);
+        _ = gobject.Object.bindProperty(
+            app.as(gobject.Object),
+            "config",
+            win.as(gobject.Object),
+            "config",
+            .{},
         );
 
         // We have to show it otherwise it'll just be hidden.
@@ -1663,18 +1901,40 @@ pub const Window = extern struct {
         _: *gobject.ParamSpec,
         self: *Self,
     ) callconv(.c) void {
+        self.syncTabSidebar();
+        self.closeIfEmpty();
+    }
+
+    fn tabViewIsTransferringPage(
+        _: *adw.TabView,
+        _: *gobject.ParamSpec,
+        self: *Self,
+    ) callconv(.c) void {
         const priv = self.private();
-        if (priv.tab_view.getNPages() == 0) {
-            // If we have no pages left then we want to close window.
+        if (priv.tab_view.getIsTransferringPage() != 0) return;
+        if (priv.tab_view.getNPages() != 0) return;
+        if (priv.tab_transfer_close_source != null) return;
+        priv.tab_transfer_close_source = glib.idleAdd(
+            closeIfEmptyIdle,
+            self,
+        );
+    }
 
-            // If the tab overview is open, then we don't close the window
-            // because its a rather abrupt experience. This also fixes an
-            // issue where dragging out the last tab in the tab overview
-            // won't cause Ghostty to exit.
-            if (priv.tab_overview.getOpen() != 0) return;
+    fn closeIfEmptyIdle(ud: ?*anyopaque) callconv(.c) c_int {
+        const self: *Self = @ptrCast(@alignCast(ud orelse return 0));
+        self.private().tab_transfer_close_source = null;
+        self.closeIfEmpty();
+        return 0;
+    }
 
-            self.as(gtk.Window).close();
-        }
+    fn closeIfEmpty(self: *Self) void {
+        const priv = self.private();
+        if (priv.tab_view.getNPages() != 0) return;
+        if (priv.tab_view.getIsTransferringPage() != 0) return;
+
+        // Keep an empty overview open so users can create a replacement tab.
+        if (priv.tab_overview.getOpen() != 0) return;
+        self.as(gtk.Window).close();
     }
     fn setupTabMenu(
         _: *adw.TabView,
@@ -2107,6 +2367,14 @@ pub const Window = extern struct {
         self.toggleCommandPalette();
     }
 
+    fn actionToggleTabSidebar(
+        _: *gio.SimpleAction,
+        _: ?*glib.Variant,
+        self: *Window,
+    ) callconv(.c) void {
+        _ = self.toggleTabSidebar();
+    }
+
     /// Toggle the Ghostty inspector for the active surface.
     fn toggleInspector(self: *Self) void {
         const surface = self.getActiveSurface() orelse return;
@@ -2161,12 +2429,18 @@ pub const Window = extern struct {
                 properties.@"tabs-wide".impl,
                 properties.@"toolbar-style".impl,
                 properties.@"titlebar-style".impl,
+                properties.@"vertical-tabs".impl,
             });
 
             // Bindings
             class.bindTemplateChildPrivate("tab_overview", .{});
             class.bindTemplateChildPrivate("tab_bar", .{});
             class.bindTemplateChildPrivate("tab_view", .{});
+            class.bindTemplateChildPrivate("tab_split_view", .{});
+            class.bindTemplateChildPrivate("vertical_tab_list", .{});
+            class.bindTemplateChildPrivate("vertical_tabs_sidebar", .{});
+            class.bindTemplateChildPrivate("vertical_tabs_header_button", .{});
+            class.bindTemplateChildPrivate("vertical_tabs_sidebar_button", .{});
             class.bindTemplateChildPrivate("toolbar", .{});
             class.bindTemplateChildPrivate("toast_overlay", .{});
 
@@ -2182,7 +2456,11 @@ pub const Window = extern struct {
             class.bindTemplateCallback("setup_tab_menu", &setupTabMenu);
             class.bindTemplateCallback("tab_create_window", &tabViewCreateWindow);
             class.bindTemplateCallback("notify_n_pages", &tabViewNPages);
+            class.bindTemplateCallback("notify_is_transferring_page", &tabViewIsTransferringPage);
             class.bindTemplateCallback("notify_selected_page", &tabViewSelectedPage);
+            class.bindTemplateCallback("toggle_vertical_tabs", &btnToggleVerticalTabs);
+            class.bindTemplateCallback("vertical_tab_activated", &verticalTabActivated);
+            class.bindTemplateCallback("vertical_tabs_position_changed", &verticalTabsPositionChanged);
             class.bindTemplateCallback("notify_config", &propConfig);
             class.bindTemplateCallback("notify_fullscreened", &propFullscreened);
             class.bindTemplateCallback("notify_is_active", &propIsActive);
