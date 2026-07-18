@@ -3641,14 +3641,24 @@ else
 @"gtk-titlebar": bool = true,
 
 /// Determines the side of the screen that the GTK tab bar will stick to.
-/// Top, bottom, and hidden are supported. The default is top.
+/// The supported values are `top`, `bottom`, `left`, and `right`. The default
+/// is `top`. Left and right use a vertical tab sidebar.
 ///
-/// When `hidden` is set, a tab button displaying the number of tabs will appear
-/// in the title bar. It has the ability to open a tab overview for displaying
-/// tabs. Alternatively, you can use the `toggle_tab_overview` action in a
-/// keybind if your window doesn't have a title bar, or you can switch tabs
-/// with keybinds.
+/// In vertical mode, `window-show-tab-bar` controls the initial visibility of
+/// the sidebar, and `gtk-wide-tabs` has no effect. The `tabs` titlebar style is
+/// only used for horizontal tabs; vertical tabs use the native titlebar style.
+///
+/// The pre-1.2 value `hidden` is deprecated. Use
+/// `window-show-tab-bar = never` instead.
 @"gtk-tabs-location": GtkTabsLocation = .top,
+
+/// Whether vertical GTK tabs use the terminal background opacity. When `true`,
+/// the sidebar uses `background-opacity`, allowing the compositor blur to show
+/// through it. When `false`, the sidebar is fully opaque and uses the standard
+/// GTK styling, matching the behavior of horizontal tabs.
+///
+/// This has no effect unless `gtk-tabs-location` is `left` or `right`.
+@"gtk-vertical-tabs-transparent": bool = true,
 
 /// If this is `true`, the titlebar will be hidden when the window is maximized,
 /// and shown when the titlebar is unmaximized. GTK only.
@@ -9046,6 +9056,8 @@ pub const GtkSingleInstance = enum {
 pub const GtkTabsLocation = enum {
     top,
     bottom,
+    left,
+    right,
 };
 
 /// See gtk-toolbar-style
@@ -10497,6 +10509,52 @@ test "clone preserves conditional set" {
     defer clone1.deinit();
 
     try testing.expect(clone1._conditional_set.contains(.theme));
+}
+
+test "gtk tabs location supports vertical sides" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    inline for (&.{ GtkTabsLocation.left, GtkTabsLocation.right }) |location| {
+        var cfg = try Config.default(alloc);
+        defer cfg.deinit();
+
+        var it: TestIterator = .{ .data = &.{
+            "--gtk-tabs-location=" ++ @tagName(location),
+        } };
+        try cfg.loadIter(alloc, &it);
+        try testing.expectEqual(location, cfg.@"gtk-tabs-location");
+    }
+}
+
+test "gtk vertical tabs transparency" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var cfg = try Config.default(alloc);
+    defer cfg.deinit();
+    try testing.expect(cfg.@"gtk-vertical-tabs-transparent");
+
+    var it: TestIterator = .{ .data = &.{
+        "--gtk-vertical-tabs-transparent=false",
+    } };
+    try cfg.loadIter(alloc, &it);
+    try testing.expect(!cfg.@"gtk-vertical-tabs-transparent");
+}
+
+test "gtk tabs location hidden compatibility" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var cfg = try Config.default(alloc);
+    defer cfg.deinit();
+    var it: TestIterator = .{ .data = &.{
+        "--gtk-tabs-location=hidden",
+    } };
+    try cfg.loadIter(alloc, &it);
+
+    try testing.expectEqual(.top, cfg.@"gtk-tabs-location");
+    try testing.expectEqual(.never, cfg.@"window-show-tab-bar");
 }
 
 test "working-directory expands tilde" {
