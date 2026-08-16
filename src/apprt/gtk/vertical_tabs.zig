@@ -178,14 +178,31 @@ fn factorySetup(
 
     const secondary_click = gtk.GestureClick.new();
     secondary_click.as(gtk.GestureSingle).setButton(3);
-    _ = gtk.GestureClick.signals.released.connect(
+    _ = gtk.GestureClick.signals.pressed.connect(
         secondary_click,
         *gtk.ListItem,
-        secondaryClickReleased,
+        secondaryClickPressed,
         list_item,
         .{},
     );
     box.as(gtk.Widget).addController(secondary_click.as(gtk.EventController));
+
+    const pointer_motion = gtk.EventControllerMotion.new();
+    _ = gtk.EventControllerMotion.signals.enter.connect(
+        pointer_motion,
+        *gtk.ListItem,
+        pointerEntered,
+        list_item,
+        .{},
+    );
+    _ = gtk.EventControllerMotion.signals.leave.connect(
+        pointer_motion,
+        *gtk.ListItem,
+        pointerLeft,
+        list_item,
+        .{},
+    );
+    box.as(gtk.Widget).addController(pointer_motion.as(gtk.EventController));
 
     const drag_source = gtk.DragSource.new();
     drag_source.setActions(.{ .move = true });
@@ -296,7 +313,10 @@ fn update(list_item: *gtk.ListItem) void {
     label.setLabel(title);
     box.as(gtk.Widget).setTooltipText(tooltip);
     attention.setVisible(page.getNeedsAttention());
-    close_button.setVisible(page.getSelected());
+    close_button.setVisible(@intFromBool(
+        page.getSelected() != 0 or
+            box.as(gtk.Widget).hasCssClass("vertical-tab-hover") != 0,
+    ));
     if (comptime gtk_version.atLeast(4, 12, 0)) {
         list_item.setAccessibleLabel(title);
     }
@@ -335,17 +355,17 @@ fn middleClickReleased(
     closePage(list_item);
 }
 
-fn secondaryClickReleased(
-    gesture: *gtk.GestureClick,
+fn secondaryClickPressed(
+    _: *gtk.GestureClick,
     _: c_int,
     x: f64,
     y: f64,
     list_item: *gtk.ListItem,
 ) callconv(.c) void {
-    if (!clickIsInside(gesture, list_item, x, y)) return;
     const page = getPage(list_item) orelse return;
     const tab_view = getView(page) orelse return;
     tab_view.setSelectedPage(page);
+    const row = getRowParts(list_item) orelse return;
 
     const menu = gio.Menu.new();
     defer menu.unref();
@@ -354,7 +374,7 @@ fn secondaryClickReleased(
     const popover_menu = gtk.PopoverMenu.newFromModel(menu.as(gio.MenuModel));
     const popover = popover_menu.as(gtk.Popover);
     popover.setHasArrow(@intFromBool(false));
-    popover.as(gtk.Widget).setParent(list_item.getChild() orelse return);
+    popover.as(gtk.Widget).setParent(row.row.as(gtk.Widget));
     _ = gtk.Popover.signals.closed.connect(
         popover,
         ?*anyopaque,
@@ -371,6 +391,26 @@ fn secondaryClickReleased(
     };
     popover.setPointingTo(&rect);
     popover.popup();
+}
+
+fn pointerEntered(
+    _: *gtk.EventControllerMotion,
+    _: f64,
+    _: f64,
+    list_item: *gtk.ListItem,
+) callconv(.c) void {
+    const row = getRowParts(list_item) orelse return;
+    row.row.as(gtk.Widget).addCssClass("vertical-tab-hover");
+    update(list_item);
+}
+
+fn pointerLeft(
+    _: *gtk.EventControllerMotion,
+    list_item: *gtk.ListItem,
+) callconv(.c) void {
+    const row = getRowParts(list_item) orelse return;
+    row.row.as(gtk.Widget).removeCssClass("vertical-tab-hover");
+    update(list_item);
 }
 
 fn popoverClosed(popover: *gtk.Popover, _: ?*anyopaque) callconv(.c) void {
